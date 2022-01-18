@@ -3,43 +3,49 @@ import librosa
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import streamlit as st
 
-st.header("Trascribe Russian Audio")
-
-filePath = st.text_input(label = "Please enter the path to the file" )
+uploaded_file = st.file_uploader(label = "Please upload your file" )
 
 LANG_ID = "ru"
 MODEL_ID = "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
-#test_dataset = load_dataset("common_voice", LANG_ID, split=f"test[:{SAMPLES}]")
 
-# Preprocessing the datasets.
-# We need to read the audio files as arrays
+#load wav2vec2 tokenizer and model
+tokenizer = Wav2Vec2Tokenizer.from_pretrained("jonatasgrosman/wav2vec2-large-xlsr-53-russian")
+
+model = Wav2Vec2ForCTC.from_pretrained("jonatasgrosman/wav2vec2-large-xlsr-53-russian")
+
 @st.cache
-def speech_file_to_array_fn(filepath):
-    speech_array, sampling_rate = librosa.load(filepath, sr=16_000)
-    return speech_array
+def asr_transcript(audio_file):
+    transcript = ""
 
-#test_dataset = test_dataset.map(speech_file_to_array_fn)
-if filePath:
+    # Stream over 20 seconds chunks
+    stream = librosa.stream(
+        audio_file.name, block_length=20, frame_length=16000, hop_length=16000
+    )
 
-    audio_file = open(filePath, 'rb')
+    for speech in stream:
+        if len(speech.shape) > 1:
+            speech = speech[:, 0] + speech[:, 1]
+
+        input_values = tokenizer(speech, return_tensors="pt").input_values
+        logits = model(input_values).logits
+
+        predicted_ids = torch.argmax(logits, dim=-1)
+        transcription = tokenizer.batch_decode(predicted_ids)[0]
+        transcript += transcription.lower() + " "
+
+    return transcript
+
+
+if uploaded_file is not None:
+
+    audio_file = open(uploaded_file, 'rb')
     audio_bytes = audio_file.read()
 
     st.audio(audio_bytes, format='audio/wav')
 
     with st.spinner('Please wait...'):
-
-        processor = Wav2Vec2Processor.from_pretrained(MODEL_ID)
-        model = Wav2Vec2ForCTC.from_pretrained(MODEL_ID)
-
-        speech = speech_file_to_array_fn(filepath=filePath)
-        inputs = processor(speech, sampling_rate=16_000, return_tensors="pt", padding=True)
-
-        with torch.no_grad():
-            logits = model(inputs.input_values, attention_mask=inputs.attention_mask).logits
-
-        predicted_ids = torch.argmax(logits, dim=-1)
-        predicted_sentence = processor.batch_decode(predicted_ids)
+        transcript = asr_transcript(uploaded_file)
 
     st.balloons()
     st.header("Transcribed Text")
-    st.subheader(predicted_sentence)
+    st.subheader(transcript)
